@@ -10,6 +10,7 @@ zip Goodvibes.sublime-package \
     goodvibes.sublime-settings \
     Default.sublime-commands \
     Context.sublime-menu \
-    Default.sublime-keymap
+    Default.sublime-keymap \
+    README.md
 
 echo "Created Goodvibes.sublime-package"
