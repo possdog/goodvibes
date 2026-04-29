@@ -281,6 +281,10 @@ class GoodvibesInvokeAiCommand(sublime_plugin.TextCommand):
                 if active_tasks.get(view_id, {}).get(task_id, {}).get("cancel", False):
                     break
 
+                # If the user closed the tab, abort the stream and exit the loop immediately
+                if not view.is_valid():
+                    break
+
                 line = response.readline()
                 if not line:
                     break
@@ -353,20 +357,26 @@ class GoodvibesInvokeAiCommand(sublime_plugin.TextCommand):
         view_id = view.id()
 
         # We no longer need to track the buffer coordinates for this task
-        view.erase_regions(region_key)
+        # Only attempt to erase regions if the view still exists
+        if view.is_valid():
+            view.erase_regions(region_key)
 
         if view_id in active_tasks and task_id in active_tasks[view_id]:
             # Erase the visual phantom ghost text
-            phantom_set = active_tasks[view_id][task_id].get("phantom_set")
-            if phantom_set:
-                phantom_set.update([])
+            # Only attempt to clear the phantoms if the view still exists
+            if view.is_valid():
+                phantom_set = active_tasks[view_id][task_id].get("phantom_set")
+                if phantom_set:
+                    phantom_set.update([])
 
             # Remove the task from the tracking dictionary
             del active_tasks[view_id][task_id]
             if not active_tasks[view_id]:
                 del active_tasks[view_id]
 
-        update_phantoms(view)
+        # Only attempt to re-trigger the animation loop if the view still exists
+        if view.is_valid():
+            update_phantoms(view)
 
 
 class GoodvibesReplaceTextCommand(sublime_plugin.TextCommand):
