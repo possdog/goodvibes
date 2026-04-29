@@ -1,7 +1,7 @@
 [
     // Example keybinding for Goodvibes. Uncomment to use, or customize the keys as you see fit.
     // {
-    //     "keys": ["ctrl+shift+g"],
+    //     "keys": ["command+option+control+g"],
     //     "command": "goodvibes_invoke_ai"
     // }
 ]
