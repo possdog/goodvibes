@@ -1,0 +1,22 @@
+[
+    {
+        "caption": "Goodvibes: Invoke AI on Selection",
+        "command": "goodvibes_invoke_ai"
+    },
+    {
+        "caption": "Preferences: Goodvibes Settings",
+        "command": "edit_settings",
+        "args": {
+            "base_file": "${packages}/Goodvibes/goodvibes.sublime-settings",
+            "default": "{\n\t$0\n}\n"
+        }
+    },
+    {
+        "caption": "Preferences: Goodvibes Key Bindings",
+        "command": "edit_settings",
+        "args": {
+            "base_file": "${packages}/Goodvibes/Default.sublime-keymap",
+            "default": "[\n\t$0\n]\n"
+        }
+    }
+]

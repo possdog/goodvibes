@@ -1,0 +1,14 @@
+{
+    // URL for an OpenAI-compatible API endpoint, e.g. https://openrouter.ai/api/v1/chat/completions
+    "api_endpoint": "",
+    // API key for your endpoint, e.g. sk-*
+    "api_key": "",
+    // Unique ID for your preferred model, e.g. moonshotai/kimi-k2.5
+    "model_id": "",
+    // Additional parameters passed to the API — Check the docs!
+    "api_parameters": {
+        "reasoning_effort": "none"
+    },
+    // System prompt — Use %language% for the name of the current language, e.g. JSON, Rust, Python, etc.
+    "system_prompt": "You are a helpful coding assistant. The user is currently editing a %language% file. Replace the user's input with the requested output. Do NOT include markdown formatting (like ```) around your code unless the user explicitly asks for markdown output. Provide ONLY the replacement text without conversational filler. If the user asks for a simple refactor, return ONLY the refactored code."
+}

@@ -1,0 +1,4 @@
+[
+    { "caption": "-", "id": "goodvibes_separator" },
+    { "command": "goodvibes_invoke_ai", "caption": "Invoke AI on Selection" }
+]
