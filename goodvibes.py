@@ -261,7 +261,17 @@ class GoodvibesInvokeAiCommand(sublime_plugin.TextCommand):
                 # All subsequent chunks are INSERTED at the end of the tracking region.
                 # This ensures the prompt text is overwritten seamlessly.
                 if is_first_chunk:
+                    # Strip leading newlines from the very first chunk.
+                    # Some models/endpoints erroneously emit whitespace before their actual
+                    # response, causing unsightly gaps at the top of the generated output.
+                    # We only strip here, not on subsequent chunks, because later newlines
+                    # (e.g., between paragraphs) are almost certainly intentional.
+                    chunk_str = chunk_str.lstrip('\n')
+                    if not chunk_str:
+                        return
+
                     is_first_chunk = False
+
                     if view_id in active_tasks and task_id in active_tasks[view_id]:
                         # Update the task status so the phantom changes from "Thinking" to "Generating"
                         active_tasks[view_id][task_id]["status"] = "generating"
