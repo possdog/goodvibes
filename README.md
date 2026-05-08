@@ -1,6 +1,6 @@
 # Goodvibes
 
-> 🤖 This project was made by an LLM with a human in the loop.
+> 🤖 This code was written by a human-led AI agent.
 
 A powerful, dependency-free Sublime Text 4 package that brings inline LLM assistance directly into your editor.
 
