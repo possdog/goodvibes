@@ -154,56 +154,69 @@ class GoodvibesInvokeAiCommand(sublime_plugin.TextCommand):
             active_tasks[view_id] = {}
 
         selections = list(self.view.sel())
+        view = self.view
+        window = view.window()
+        if not window:
+            return
 
-        # Support Multi-Cursor:
-        # We start an independent request for *each* selection block.
-        # This allows users to generate/refactor multiple places in a file simultaneously.
-        for sel in selections:
-            task_id = str(uuid.uuid4())
-            phantom_set = sublime.PhantomSet(self.view, f"goodvibes_{task_id}")
+        def on_done(instruction):
+            instruction = instruction.strip()
+            if not instruction:
+                return
 
-            # Register the task in the global dictionary
-            active_tasks[view_id][task_id] = {
-                "cancel": False,
-                "status": "thinking",
-                "view": self.view,
-                "phantom_set": phantom_set
-            }
+            # Support Multi-Cursor:
+            # We start an independent request for *each* selection block.
+            # This allows users to generate/refactor multiple places in a file simultaneously.
+            for sel in selections:
+                task_id = str(uuid.uuid4())
+                phantom_set = sublime.PhantomSet(view, f"goodvibes_{task_id}")
 
-            # If the user just clicked somewhere (no text selected),
-            # we expand the selection to the entire current line.
-            if sel.empty():
-                target_region = self.view.line(sel)
-            else:
-                target_region = sel
+                # Register the task in the global dictionary
+                active_tasks[view_id][task_id] = {
+                    "cancel": False,
+                    "status": "thinking",
+                    "view": view,
+                    "phantom_set": phantom_set
+                }
 
-            # Read the selected text to send to the LLM.
-            text = self.view.substr(target_region)
+                if sel.empty():
+                    # No selection; user wants to generate code at this line.
+                    # Send only the instruction as the user message.
+                    target_region = view.line(sel)
+                    text = instruction
+                else:
+                    # Selection exists; user wants to transform the selected code.
+                    # Send both the instruction and the code for context.
+                    target_region = sel
+                    selection_text = view.substr(target_region)
+                    text = f"{instruction}\n\n{selection_text}"
 
-            # If the line/selection was totally empty, abort this specific task.
-            if not text.strip():
-                del active_tasks[view_id][task_id]
-                continue
+                # If the target is totally empty, abort this specific task.
+                if not text.strip():
+                    del active_tasks[view_id][task_id]
+                    continue
 
-            # Create a unique region key to track the text boundary in the editor.
-            region_key = f"goodvibes_target_{task_id}"
+                # Create a unique region key to track the text boundary in the editor.
+                region_key = f"goodvibes_target_{task_id}"
 
-            # We use `add_regions` with `sublime.HIDDEN` to track where the text is.
-            # Why: If the user edits other parts of the file while the LLM is thinking,
-            # Sublime Text will automatically adjust this region's coordinates so our
-            # insertions don't end up in the wrong place.
-            self.view.add_regions(region_key, [target_region], "text", "", sublime.HIDDEN)
+                # We use `add_regions` with `sublime.HIDDEN` to track where the text is.
+                # Why: If the user edits other parts of the file while the LLM is thinking,
+                # Sublime Text will automatically adjust this region's coordinates so our
+                # insertions don't end up in the wrong place.
+                view.add_regions(region_key, [target_region], "text", "", sublime.HIDDEN)
 
-            # Offload the blocking network request to a background daemon thread
-            # so the Sublime Text UI doesn't freeze.
-            thread = threading.Thread(
-                target=self.run_llm,
-                args=(api_endpoint, str(api_key).strip(), model_id, system_prompt, text, self.view, region_key, task_id, api_parameters)
-            )
-            thread.daemon = True
-            thread.start()
+                # Offload the blocking network request to a background daemon thread
+                # so the Sublime Text UI doesn't freeze.
+                thread = threading.Thread(
+                    target=self.run_llm,
+                    args=(api_endpoint, str(api_key).strip(), model_id, system_prompt, text, view, region_key, task_id, api_parameters)
+                )
+                thread.daemon = True
+                thread.start()
 
-        update_phantoms(self.view)
+            update_phantoms(view)
+
+        window.show_input_panel("✦ Instructions:", "", on_done, None, None)
 
     def run_llm(self, api_endpoint, api_key, model_id, system_prompt, text, view, region_key, task_id, api_parameters):
         """

@@ -44,12 +44,12 @@ This will open a dual-pane layout. In the right pane (your User settings), confi
     "api_key": "sk-...",
 
     // The specific model you want to use.
-    "model_id": "moonshotai/kimi-k2.5",
+    "model_id": "minimax/minimax-m2.5",
 
     // Optional: Extra JSON parameters to inject into the API request payload.
     // By default, this disables thinking/reasoning for modern models to ensure low Time To First Token latency.
     "api_parameters": {
-        "reasoning_effort": "none"
+        "reasoning_effort": "low"
     },
 
     // Optional: The prompt that instructs the model on how to behave.
@@ -68,7 +68,7 @@ This will open a dual-pane layout. In the right pane (your User settings), confi
      ```json
      [
          {
-             "keys": ["ctrl+shift+g"],
+             "keys": ["ctrl+enter"],
              "command": "goodvibes_invoke_ai"
          }
      ]
