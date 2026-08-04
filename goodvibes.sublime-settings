@@ -3,10 +3,14 @@
     "api_endpoint": "",
     // Your API key for the chosen provider (e.g. sk-...)
     "api_key": "",
+    // Optional: Name of environment variable containing the API key (e.g. "MISTRAL_API_KEY").
+    // If both api_key and api_key_var are set, api_key takes precedence.
+    // Requires at least one of api_key or api_key_var to be configured.
+    "api_key_var": "",
     // The specific model you want to use (e.g. "minimax/minimax-m2.5")
     "model_id": "",
     // Optional: Extra JSON parameters to inject into the API request payload.
-    // By default, this disables thinking/reasoning for modern models to ensure low Time To First Token latency.
+    // By default, this disables thinking/reasoning to ensure low Time To First Token latency.
     "api_parameters": {
         "reasoning_effort": "none"
     },
