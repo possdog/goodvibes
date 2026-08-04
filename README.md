@@ -17,7 +17,7 @@ With Goodvibes, you can highlight any text (or just place your cursor on a line)
 
 ## Installation
 
-*Note: Goodvibes is not currently available on Package Control.*
+*Note: Goodvibes is not currently available on Package Control, and probably never will be. Sorry!*
 
 1. Download the latest `Goodvibes.sublime-package` from the releases page (or build it yourself using `./bundle.sh`).
 2. Open Sublime Text.
@@ -60,7 +60,7 @@ This will open a dual-pane layout. In the right pane (your User settings), confi
 
 ## Usage
 
-1. Select the text you want to modify (e.g., a comment describing a function, or a block of code to refactor). If you don't select anything, Goodvibes will simply use the line where your cursor is currently placed.
+1. Place your cursor where you would like Goodvibes to begin writing. Any selected text will be provided as additional context and will be replaced by the response.
 2. Invoke Goodvibes using one of the following methods:
    - **Command Palette**: Search for `Goodvibes: Invoke AI on Selection`.
    - **Context Menu**: Right-click the selection and choose `Invoke AI on Selection`.
@@ -73,8 +73,7 @@ This will open a dual-pane layout. In the right pane (your User settings), confi
          }
      ]
      ```
-
-The AI's response will replace the selection (or the line) and stream inline!
+3. Provide your instructions in the text box at the bottom of the window and press enter to submit; the response will be streamed inline.
 
 ## Troubleshooting
 
