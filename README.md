@@ -19,12 +19,13 @@ With Goodvibes, you can highlight any text (or just place your cursor on a line)
 
 *Note: Goodvibes is not currently available on Package Control, and probably never will be. Sorry!*
 
-1. Download the latest `Goodvibes.sublime-package` from the releases page (or build it yourself using `./bundle.sh`).
-2. Open Sublime Text.
-3. Go to **Preferences > Browse Packages...**.
-4. Navigate up one directory level to the `Installed Packages` folder.
-5. Drop `Goodvibes.sublime-package` into the `Installed Packages` folder.
-6. Restart Sublime Text (optional, but recommended).
+1. Clone or download this repository
+2. Run `./bundle.sh` — This will produce a `Goodvibes.sublime-package` file
+3. Open Sublime Text.
+4. Go to **Preferences > Browse Packages...**.
+5. Navigate up one directory level to the `Installed Packages` folder.
+6. Move or symlink `Goodvibes.sublime-package` into the `Installed Packages` folder.
+7. Restart Sublime Text (optional, but recommended).
 
 ## Configuration
 
