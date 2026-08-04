@@ -1,11 +1,13 @@
-import sublime
-import sublime_plugin
+import json
+import os
 import threading
 import time
-import uuid
-import urllib.request
 import urllib.error
-import json
+import urllib.request
+import uuid
+
+import sublime
+import sublime_plugin
 
 # Global state to track active tasks per view
 # Key: view.id(), Value: dict of task_id -> {
@@ -32,6 +34,30 @@ is_animating = False
 def get_settings():
     """Retrieves the Goodvibes package settings."""
     return sublime.load_settings("goodvibes.sublime-settings")
+
+
+def get_api_key():
+    """
+    Retrieves the API key from settings, preferring 'api_key' over 'api_key_var'.
+    If 'api_key_var' is set, it fetches the value from the corresponding environment variable.
+    Returns the resolved API key or None if neither is configured.
+    """
+    settings = get_settings()
+    api_key = settings.get("api_key")
+    api_key_var = settings.get("api_key_var")
+
+    # Prefer api_key if it's set
+    if api_key and str(api_key).strip():
+        return str(api_key).strip()
+
+    # Fall back to api_key_var environment variable
+    if api_key_var and str(api_key_var).strip():
+        env_var_name = str(api_key_var).strip()
+        env_value = os.environ.get(env_var_name)
+        if env_value:
+            return env_value
+
+    return None
 
 
 def animate_phantoms():
@@ -126,18 +152,24 @@ class GoodvibesInvokeAiCommand(sublime_plugin.TextCommand):
 
     def run(self, edit):
         settings = get_settings()
-        api_key = settings.get("api_key")
+        api_key = get_api_key()
         api_endpoint = settings.get("api_endpoint")
         model_id = settings.get("model_id")
         system_prompt = settings.get("system_prompt")
         api_parameters = settings.get("api_parameters", {})
 
         if not api_key or not model_id:
-            sublime.error_message("Goodvibes: Please set your api_key and model_id in the Goodvibes settings.")
+            sublime.error_message(
+                "Goodvibes: Please set your api_key (or api_key_var) and model_id in the Goodvibes settings."
+            )
             return
 
         # Default to OpenAI's endpoint if none is provided.
-        api_endpoint = str(api_endpoint).strip() if api_endpoint and str(api_endpoint).strip() else "https://api.openai.com/v1/chat/completions"
+        api_endpoint = (
+            str(api_endpoint).strip()
+            if api_endpoint and str(api_endpoint).strip()
+            else "https://api.openai.com/v1/chat/completions"
+        )
 
         # Try to determine the programming language of the current view.
         # This helps the LLM provide context-aware code without us explicitly
@@ -176,7 +208,7 @@ class GoodvibesInvokeAiCommand(sublime_plugin.TextCommand):
                     "cancel": False,
                     "status": "thinking",
                     "view": view,
-                    "phantom_set": phantom_set
+                    "phantom_set": phantom_set,
                 }
 
                 if sel.empty():
@@ -203,13 +235,25 @@ class GoodvibesInvokeAiCommand(sublime_plugin.TextCommand):
                 # Why: If the user edits other parts of the file while the LLM is thinking,
                 # Sublime Text will automatically adjust this region's coordinates so our
                 # insertions don't end up in the wrong place.
-                view.add_regions(region_key, [target_region], "text", "", sublime.HIDDEN)
+                view.add_regions(
+                    region_key, [target_region], "text", "", sublime.HIDDEN
+                )
 
                 # Offload the blocking network request to a background daemon thread
                 # so the Sublime Text UI doesn't freeze.
                 thread = threading.Thread(
                     target=self.run_llm,
-                    args=(api_endpoint, str(api_key).strip(), model_id, system_prompt, text, view, region_key, task_id, api_parameters)
+                    args=(
+                        api_endpoint,
+                        str(api_key).strip(),
+                        model_id,
+                        system_prompt,
+                        text,
+                        view,
+                        region_key,
+                        task_id,
+                        api_parameters,
+                    ),
                 )
                 thread.daemon = True
                 thread.start()
@@ -218,7 +262,18 @@ class GoodvibesInvokeAiCommand(sublime_plugin.TextCommand):
 
         window.show_input_panel("✦ Instructions:", "", on_done, None, None)
 
-    def run_llm(self, api_endpoint, api_key, model_id, system_prompt, text, view, region_key, task_id, api_parameters):
+    def run_llm(
+        self,
+        api_endpoint,
+        api_key,
+        model_id,
+        system_prompt,
+        text,
+        view,
+        region_key,
+        task_id,
+        api_parameters,
+    ):
         """
         Background thread function that makes the HTTP request, parses the Server-Sent Events (SSE) stream,
         and batches the text chunks back to the main UI thread.
@@ -231,9 +286,9 @@ class GoodvibesInvokeAiCommand(sublime_plugin.TextCommand):
                 "model": model_id,
                 "messages": [
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": text}
+                    {"role": "user", "content": text},
                 ],
-                "stream": True  # Streaming must be True for our chunk-by-chunk UX
+                "stream": True,  # Streaming must be True for our chunk-by-chunk UX
             }
 
             # Inject any extra parameters defined by the user (like reasoning_effort).
@@ -248,9 +303,9 @@ class GoodvibesInvokeAiCommand(sublime_plugin.TextCommand):
                 headers={
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {api_key}",
-                    "User-Agent": "Goodvibes/1.0 (Sublime Text Plugin)"
+                    "User-Agent": "Goodvibes/1.0 (Sublime Text Plugin)",
                 },
-                method="POST"
+                method="POST",
             )
 
             # Blocks here until the server accepts the connection and returns headers.
@@ -279,7 +334,7 @@ class GoodvibesInvokeAiCommand(sublime_plugin.TextCommand):
                     # response, causing unsightly gaps at the top of the generated output.
                     # We only strip here, not on subsequent chunks, because later newlines
                     # (e.g., between paragraphs) are almost certainly intentional.
-                    chunk_str = chunk_str.lstrip('\n')
+                    chunk_str = chunk_str.lstrip("\n")
                     if not chunk_str:
                         return
 
@@ -290,9 +345,21 @@ class GoodvibesInvokeAiCommand(sublime_plugin.TextCommand):
                         active_tasks[view_id][task_id]["status"] = "generating"
 
                     # sublime.set_timeout executes the command safely on the main UI thread
-                    sublime.set_timeout(lambda: view.run_command("goodvibes_replace_text", {"region_key": region_key, "text": chunk_str}), 0)
+                    sublime.set_timeout(
+                        lambda: view.run_command(
+                            "goodvibes_replace_text",
+                            {"region_key": region_key, "text": chunk_str},
+                        ),
+                        0,
+                    )
                 else:
-                    sublime.set_timeout(lambda: view.run_command("goodvibes_insert_text", {"region_key": region_key, "text": chunk_str}), 0)
+                    sublime.set_timeout(
+                        lambda: view.run_command(
+                            "goodvibes_insert_text",
+                            {"region_key": region_key, "text": chunk_str},
+                        ),
+                        0,
+                    )
 
             last_flush_time = 0
 
@@ -355,14 +422,14 @@ class GoodvibesInvokeAiCommand(sublime_plugin.TextCommand):
         except urllib.error.HTTPError as e:
             # Handle API errors cleanly and display the server's JSON reason
             try:
-                error_body = e.read().decode('utf-8')
+                error_body = e.read().decode("utf-8")
             except Exception:
                 error_body = ""
             err_msg = f"Goodvibes HTTP Error: {e.code} {e.reason}\n{error_body}"
             # Ensure evaluation of variables happens before the lambda executes
             sublime.set_timeout(lambda msg=err_msg: sublime.error_message(msg), 0)
         except Exception as e:
-            err_msg = f"Goodvibes API Error:\n{str(e)}"
+            err_msg = f"Goodvibes API Error:\n{e!s}"
             sublime.set_timeout(lambda msg=err_msg: sublime.error_message(msg), 0)
         finally:
             # Ensure the socket connection is gracefully closed
@@ -534,7 +601,9 @@ class GoodvibesUndoInterceptor(sublime_plugin.EventListener):
                 # We schedule a bulk undo to remove the entire AI block at once.
                 # We use set_timeout so this WindowCommand can be fired outside
                 # the scope of the current TextCommand phase.
-                sublime.set_timeout(lambda: view.window().run_command("goodvibes_bulk_undo"), 0)
+                sublime.set_timeout(
+                    lambda: view.window().run_command("goodvibes_bulk_undo"), 0
+                )
                 return ("goodvibes_noop", None)
 
         elif command_name in ("redo", "redo_or_repeat"):
@@ -545,7 +614,9 @@ class GoodvibesUndoInterceptor(sublime_plugin.EventListener):
             # is an undone Goodvibes text generation block. We bulk redo it.
             cmd, _, _ = view.command_history(1, True)
             if cmd in ("goodvibes_insert_text", "goodvibes_replace_text"):
-                sublime.set_timeout(lambda: view.window().run_command("goodvibes_bulk_redo"), 0)
+                sublime.set_timeout(
+                    lambda: view.window().run_command("goodvibes_bulk_redo"), 0
+                )
                 return ("goodvibes_noop", None)
 
         # Allow any other command to proceed normally

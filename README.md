@@ -41,7 +41,13 @@ This will open a dual-pane layout. In the right pane (your User settings), confi
     "api_endpoint": "https://openrouter.ai/api/v1/chat/completions",
 
     // Your API key for the chosen provider.
+    // Alternatively, use api_key_var to read from an environment variable.
     "api_key": "sk-...",
+
+    // Optional: Name of environment variable containing the API key (e.g. "OPENROUTER_API_KEY").
+    // If both api_key and api_key_var are set, api_key takes precedence.
+    // Requires at least one of api_key or api_key_var to be configured.
+    "api_key_var": "",
 
     // The specific model you want to use.
     "model_id": "minimax/minimax-m2.5",
