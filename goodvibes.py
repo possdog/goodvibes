@@ -177,6 +177,10 @@ class GoodvibesInvokeAiCommand(sublime_plugin.TextCommand):
         syntax = self.view.syntax()
         language = syntax.name if syntax else "Plain Text"
 
+        # Special case: Rust Enhanced package reports "Rust Enhanced" but we want just "Rust"
+        if language == "Rust Enhanced":
+            language = "Rust"
+
         # Dynamically inject the detected language into the system prompt.
         if system_prompt:
             system_prompt = system_prompt.replace("%language%", language)
