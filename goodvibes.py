@@ -10,6 +10,15 @@ import uuid
 import sublime
 import sublime_plugin
 
+# Tuning constants
+# How often (in seconds) the streaming buffer is flushed to the UI thread.
+FLUSH_INTERVAL = 0.1
+# How often (in milliseconds) the phantom animation loop re-queues itself.
+ANIMATION_INTERVAL = 500
+# Default timeout (in seconds) for the initial HTTP connection and reads.
+# Prevents the background thread from hanging indefinitely if a server stalls.
+HTTP_TIMEOUT = 30
+
 # Global state to track active tasks per view
 # Key: view.id(), Value: dict of task_id -> {
 #   "cancel": False,       # Flag used to signal the LLM thread to abort early
@@ -34,6 +43,9 @@ is_bulk_undoing = False
 
 # A flag to ensure we only have one animation loop running globally at a time.
 # Running multiple loops would cause the UI to redraw unnecessarily and potentially stutter.
+# Note: is_animating is only ever read and written from the main UI thread (both
+# animate_phantoms via set_timeout and update_phantoms run on the UI thread), so it
+# does not require active_tasks_lock despite being a module-level global.
 is_animating = False
 
 
@@ -61,14 +73,14 @@ def get_api_key():
         env_var_name = str(api_key_var).strip()
         env_value = os.environ.get(env_var_name)
         if env_value:
-            return env_value
+            return env_value.strip()
 
     return None
 
 
 def animate_phantoms():
     """
-    A recursive loop that animates the inline phantoms (the 'ghost' text)
+    A self-scheduling loop that animates the inline phantoms (the 'ghost' text)
     while LLM tasks are active.
 
     Why: Since TTFT (Time To First Token) can take several seconds, a static
@@ -137,11 +149,11 @@ def animate_phantoms():
             phantom = sublime.Phantom(phantom_region, content, sublime.LAYOUT_INLINE)
             phantom_set.update([phantom])
 
-    # Re-queue the animation loop to run again in 500 milliseconds
+    # Re-queue the animation loop to run again
     with active_tasks_lock:
         has_tasks = bool(active_tasks)
     if has_tasks:
-        sublime.set_timeout(animate_phantoms, 500)
+        sublime.set_timeout(animate_phantoms, ANIMATION_INTERVAL)
     else:
         is_animating = False
 
@@ -170,7 +182,7 @@ class GoodvibesInvokeAiCommand(sublime_plugin.TextCommand):
         api_key = get_api_key()
         api_endpoint = settings.get("api_endpoint")
         model_id = settings.get("model_id")
-        system_prompt = settings.get("system_prompt")
+        system_prompt = settings.get("system_prompt") or ""
         api_parameters = settings.get("api_parameters", {})
 
         if not api_key or not model_id:
@@ -187,8 +199,8 @@ class GoodvibesInvokeAiCommand(sublime_plugin.TextCommand):
         )
 
         # Try to determine the programming language of the current view.
-        # This helps the LLM provide context-aware code without us explicitly
-        # telling it what language we're using.
+        # This is injected into the system prompt via the %language% placeholder
+        # so the LLM can provide context-aware code.
         syntax = self.view.syntax()
         language = syntax.name if syntax else "Plain Text"
 
@@ -267,7 +279,7 @@ class GoodvibesInvokeAiCommand(sublime_plugin.TextCommand):
                     target=self.run_llm,
                     args=(
                         api_endpoint,
-                        str(api_key).strip(),
+                        api_key,
                         model_id,
                         system_prompt,
                         text,
@@ -314,8 +326,14 @@ class GoodvibesInvokeAiCommand(sublime_plugin.TextCommand):
             }
 
             # Inject any extra parameters defined by the user (like reasoning_effort).
+            # We guard against overwriting the core keys we already set above, so a
+            # misconfigured api_parameters entry can't silently break streaming or
+            # swap the model mid-request.
             if isinstance(api_parameters, dict):
-                data.update(api_parameters)
+                reserved = {"model", "messages", "stream"}
+                for key, value in api_parameters.items():
+                    if key not in reserved:
+                        data[key] = value
 
             # We use Python's built-in urllib to avoid forcing users to install third-party packages.
             # We explicitly add a User-Agent so services like Cloudflare don't block us as a bot.
@@ -331,7 +349,9 @@ class GoodvibesInvokeAiCommand(sublime_plugin.TextCommand):
             )
 
             # Blocks here until the server accepts the connection and returns headers.
-            response = urllib.request.urlopen(req)
+            # The timeout guards both the initial connection and individual reads, so
+            # a stalled server won't leave the background thread stuck indefinitely.
+            response = urllib.request.urlopen(req, timeout=HTTP_TIMEOUT)
 
             buffer = ""
             is_first_chunk = True
@@ -435,12 +455,12 @@ class GoodvibesInvokeAiCommand(sublime_plugin.TextCommand):
                         # Append the characters to our buffer
                         buffer += content
 
-                        # Optimization: We flush the buffer every 100ms.
+                        # Optimization: We flush the buffer every FLUSH_INTERVAL seconds.
                         # Why: If we dispatched a `run_command` for every single 2-character token,
                         # Sublime Text's undo stack would get cluttered with hundreds of tiny operations,
-                        # and the UI thread could lag. 100ms provides smooth visuals while grouping edits.
+                        # and the UI thread could lag. Batching provides smooth visuals while grouping edits.
                         current_time = time.time()
-                        if current_time - last_flush_time > 0.1:
+                        if current_time - last_flush_time > FLUSH_INTERVAL:
                             flush_buffer()
                             last_flush_time = current_time
                 except json.JSONDecodeError:
@@ -455,11 +475,11 @@ class GoodvibesInvokeAiCommand(sublime_plugin.TextCommand):
                 error_body = e.read().decode("utf-8")
             except (OSError, ValueError):
                 error_body = ""
-            err_msg = f"Goodvibes HTTP Error: {e.code} {e.reason}\n{error_body}"
+            err_msg = f"Goodvibes Error: HTTP {e.code} {e.reason}\n{error_body}"
             # Ensure evaluation of variables happens before the lambda executes
             sublime.set_timeout(lambda msg=err_msg: sublime.error_message(msg), 0)
         except (OSError, ValueError, RuntimeError) as e:
-            err_msg = f"Goodvibes API Error:\n{e!s}"
+            err_msg = f"Goodvibes Error: {e!s}"
             sublime.set_timeout(lambda msg=err_msg: sublime.error_message(msg), 0)
         finally:
             # Ensure the socket connection is gracefully closed
@@ -612,14 +632,17 @@ class GoodvibesUndoInterceptor(sublime_plugin.EventListener):
             view_id = view.id()
 
             # SCENARIO 1: The user hits Undo while the LLM is currently generating text.
+            # We cancel all active streams. The `has_tasks` check is kept inside the
+            # lock so structural mutations from other threads can't empty the dict
+            # between the check and the return.
             with active_tasks_lock:
                 tasks = active_tasks.get(view_id)
-                if tasks:
-                    # We cancel all active streams.
+                has_tasks = bool(tasks)
+                if has_tasks:
                     for tid in list(tasks):
                         tasks[tid]["cancel"] = True
 
-            if tasks:
+            if has_tasks:
                 # We substitute their Undo with our NoopCommand.
                 # Why: This swallows the keypress, stopping generation without
                 # reverting any text on the screen. It allows users to "stop" the AI
@@ -632,9 +655,15 @@ class GoodvibesUndoInterceptor(sublime_plugin.EventListener):
             if cmd in ("goodvibes_insert_text", "goodvibes_replace_text"):
                 # We schedule a bulk undo to remove the entire AI block at once.
                 # We use set_timeout so this WindowCommand can be fired outside
-                # the scope of the current TextCommand phase.
+                # the scope of the current TextCommand phase. The view may have
+                # been closed by the time this fires, so we guard against
+                # view.window() returning None.
                 sublime.set_timeout(
-                    lambda: view.window().run_command("goodvibes_bulk_undo"), 0
+                    lambda: (
+                        view.window()
+                        and view.window().run_command("goodvibes_bulk_undo")
+                    ),
+                    0,
                 )
                 return ("goodvibes_noop", None)
 
@@ -647,7 +676,11 @@ class GoodvibesUndoInterceptor(sublime_plugin.EventListener):
             cmd, _, _ = view.command_history(1, True)
             if cmd in ("goodvibes_insert_text", "goodvibes_replace_text"):
                 sublime.set_timeout(
-                    lambda: view.window().run_command("goodvibes_bulk_redo"), 0
+                    lambda: (
+                        view.window()
+                        and view.window().run_command("goodvibes_bulk_redo")
+                    ),
+                    0,
                 )
                 return ("goodvibes_noop", None)
 

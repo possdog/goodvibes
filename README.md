@@ -54,9 +54,10 @@ This will open a dual-pane layout. In the right pane (your User settings), confi
     "model_id": "minimax/minimax-m2.5",
 
     // Optional: Extra JSON parameters to inject into the API request payload.
-    // By default, this disables thinking/reasoning for modern models to ensure low Time To First Token latency.
+    // By default, this disables thinking/reasoning to ensure low Time To First Token latency.
+    // Note: The keys "model", "messages", and "stream" are reserved and will be ignored if set here.
     "api_parameters": {
-        "reasoning_effort": "low"
+        "reasoning_effort": "none"
     },
 
     // Optional: The prompt that instructs the model on how to behave.
