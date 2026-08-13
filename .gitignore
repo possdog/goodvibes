@@ -1,2 +1,3 @@
 *.sublime-package
 .ruff_cache
+__pycache__

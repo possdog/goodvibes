@@ -1,3 +1,4 @@
+import contextlib
 import json
 import os
 import threading
@@ -19,7 +20,12 @@ import sublime_plugin
 # We use this global dictionary so that if the user invokes multiple commands
 # across different files (or multi-cursor in the same file), we can track
 # and manage them independently without them colliding.
+#
+# Thread safety: active_tasks is accessed from both the main UI thread and
+# background daemon threads (one per LLM request). All reads and writes must
+# be guarded by active_tasks_lock to prevent race conditions.
 active_tasks = {}
+active_tasks_lock = threading.Lock()
 
 # A flag used by our custom Undo/Redo commands to signal to our EventListener
 # that a bulk undo/redo operation is currently in progress. This prevents the
@@ -70,16 +76,20 @@ def animate_phantoms():
     we assure the user that the background process hasn't frozen.
     """
     global is_animating
-    if not active_tasks:
-        is_animating = False
-        return
+    with active_tasks_lock:
+        if not active_tasks:
+            is_animating = False
+            return
+        # Snapshot under the lock so background threads can safely mutate
+        # active_tasks while we iterate and render phantoms below.
+        snapshot = list(active_tasks.items())
 
     # Calculate a tick (0 or 1) based on the current time to toggle the icon
     tick = int(time.time() * 2) % 2
     icon = "✦" if tick == 0 else "✧"
 
     # Iterate through all tasks in all views to update their phantoms
-    for view_id, tasks in list(active_tasks.items()):
+    for view_id, tasks in snapshot:
         for task_id, task in list(tasks.items()):
             view = task.get("view")
 
@@ -128,7 +138,9 @@ def animate_phantoms():
             phantom_set.update([phantom])
 
     # Re-queue the animation loop to run again in 500 milliseconds
-    if active_tasks:
+    with active_tasks_lock:
+        has_tasks = bool(active_tasks)
+    if has_tasks:
         sublime.set_timeout(animate_phantoms, 500)
     else:
         is_animating = False
@@ -139,8 +151,11 @@ def update_phantoms(view):
     Kicks off the global phantom animation loop if it isn't already running.
     """
     global is_animating
-    if active_tasks and not is_animating:
-        is_animating = True
+    with active_tasks_lock:
+        should_start = bool(active_tasks) and not is_animating
+        if should_start:
+            is_animating = True
+    if should_start:
         animate_phantoms()
 
 
@@ -186,8 +201,9 @@ class GoodvibesInvokeAiCommand(sublime_plugin.TextCommand):
             system_prompt = system_prompt.replace("%language%", language)
 
         view_id = self.view.id()
-        if view_id not in active_tasks:
-            active_tasks[view_id] = {}
+        with active_tasks_lock:
+            if view_id not in active_tasks:
+                active_tasks[view_id] = {}
 
         selections = list(self.view.sel())
         view = self.view
@@ -208,12 +224,13 @@ class GoodvibesInvokeAiCommand(sublime_plugin.TextCommand):
                 phantom_set = sublime.PhantomSet(view, f"goodvibes_{task_id}")
 
                 # Register the task in the global dictionary
-                active_tasks[view_id][task_id] = {
-                    "cancel": False,
-                    "status": "thinking",
-                    "view": view,
-                    "phantom_set": phantom_set,
-                }
+                with active_tasks_lock:
+                    active_tasks[view_id][task_id] = {
+                        "cancel": False,
+                        "status": "thinking",
+                        "view": view,
+                        "phantom_set": phantom_set,
+                    }
 
                 if sel.empty():
                     # No selection; user wants to generate code at this line.
@@ -229,7 +246,8 @@ class GoodvibesInvokeAiCommand(sublime_plugin.TextCommand):
 
                 # If the target is totally empty, abort this specific task.
                 if not text.strip():
-                    del active_tasks[view_id][task_id]
+                    with active_tasks_lock:
+                        del active_tasks[view_id][task_id]
                     continue
 
                 # Create a unique region key to track the text boundary in the editor.
@@ -344,9 +362,11 @@ class GoodvibesInvokeAiCommand(sublime_plugin.TextCommand):
 
                     is_first_chunk = False
 
-                    if view_id in active_tasks and task_id in active_tasks[view_id]:
-                        # Update the task status so the phantom changes from "Thinking" to "Generating"
-                        active_tasks[view_id][task_id]["status"] = "generating"
+                    with active_tasks_lock:
+                        task = active_tasks.get(view_id, {}).get(task_id)
+                        if task is not None:
+                            # Update the task status so the phantom changes from "Thinking" to "Generating"
+                            task["status"] = "generating"
 
                     # sublime.set_timeout executes the command safely on the main UI thread
                     sublime.set_timeout(
@@ -372,7 +392,13 @@ class GoodvibesInvokeAiCommand(sublime_plugin.TextCommand):
             # python from caching large blocks and causing the text to burst inconsistently.
             while True:
                 # Check if the user hit Cmd+Z and cancelled this task mid-generation
-                if active_tasks.get(view_id, {}).get(task_id, {}).get("cancel", False):
+                with active_tasks_lock:
+                    cancelled = (
+                        active_tasks.get(view_id, {})
+                        .get(task_id, {})
+                        .get("cancel", False)
+                    )
+                if cancelled:
                     break
 
                 # If the user closed the tab, abort the stream and exit the loop immediately
@@ -427,21 +453,19 @@ class GoodvibesInvokeAiCommand(sublime_plugin.TextCommand):
             # Handle API errors cleanly and display the server's JSON reason
             try:
                 error_body = e.read().decode("utf-8")
-            except Exception:
+            except (OSError, ValueError):
                 error_body = ""
             err_msg = f"Goodvibes HTTP Error: {e.code} {e.reason}\n{error_body}"
             # Ensure evaluation of variables happens before the lambda executes
             sublime.set_timeout(lambda msg=err_msg: sublime.error_message(msg), 0)
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError) as e:
             err_msg = f"Goodvibes API Error:\n{e!s}"
             sublime.set_timeout(lambda msg=err_msg: sublime.error_message(msg), 0)
         finally:
             # Ensure the socket connection is gracefully closed
             if response:
-                try:
+                with contextlib.suppress(OSError):
                     response.close()
-                except Exception:
-                    pass
 
             # De-register the task and cleanup phantoms regardless of success/error/cancel
             sublime.set_timeout(lambda: self.cleanup_task(view, region_key, task_id), 0)
@@ -455,18 +479,20 @@ class GoodvibesInvokeAiCommand(sublime_plugin.TextCommand):
         if view.is_valid():
             view.erase_regions(region_key)
 
-        if view_id in active_tasks and task_id in active_tasks[view_id]:
-            # Erase the visual phantom ghost text
-            # Only attempt to clear the phantoms if the view still exists
-            if view.is_valid():
-                phantom_set = active_tasks[view_id][task_id].get("phantom_set")
-                if phantom_set:
-                    phantom_set.update([])
+        with active_tasks_lock:
+            tasks = active_tasks.get(view_id)
+            if tasks and task_id in tasks:
+                # Erase the visual phantom ghost text
+                # Only attempt to clear the phantoms if the view still exists
+                if view.is_valid():
+                    phantom_set = tasks[task_id].get("phantom_set")
+                    if phantom_set:
+                        phantom_set.update([])
 
-            # Remove the task from the tracking dictionary
-            del active_tasks[view_id][task_id]
-            if not active_tasks[view_id]:
-                del active_tasks[view_id]
+                # Remove the task from the tracking dictionary
+                del tasks[task_id]
+                if not tasks:
+                    del active_tasks[view_id]
 
         # Only attempt to re-trigger the animation loop if the view still exists
         if view.is_valid():
@@ -579,7 +605,6 @@ class GoodvibesUndoInterceptor(sublime_plugin.EventListener):
     """
 
     def on_text_command(self, view, command_name, args):
-        global is_bulk_undoing
         if command_name == "undo":
             if is_bulk_undoing:
                 return None
@@ -587,11 +612,14 @@ class GoodvibesUndoInterceptor(sublime_plugin.EventListener):
             view_id = view.id()
 
             # SCENARIO 1: The user hits Undo while the LLM is currently generating text.
-            if view_id in active_tasks and active_tasks[view_id]:
-                # We cancel all active streams.
-                for task_id in active_tasks[view_id]:
-                    active_tasks[view_id][task_id]["cancel"] = True
+            with active_tasks_lock:
+                tasks = active_tasks.get(view_id)
+                if tasks:
+                    # We cancel all active streams.
+                    for tid in list(tasks):
+                        tasks[tid]["cancel"] = True
 
+            if tasks:
                 # We substitute their Undo with our NoopCommand.
                 # Why: This swallows the keypress, stopping generation without
                 # reverting any text on the screen. It allows users to "stop" the AI
